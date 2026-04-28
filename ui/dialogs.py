@@ -4,8 +4,10 @@ import os
 import subprocess
 from datetime import datetime
 
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, QSize, QUrl, pyqtSignal
 from PyQt6.QtGui import QFont, QPixmap
+from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -17,12 +19,29 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSlider,
+    QStackedWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
+
+PREVIEW_TYPE = {
+    ".png": "image", ".jpg": "image", ".jpeg": "image", ".gif": "image",
+    ".bmp": "image", ".webp": "image",
+    ".mp4": "video", ".mov": "video", ".avi": "video", ".webm": "video",
+    ".mkv": "video", ".wmv": "video", ".flv": "video",
+    ".mp3": "audio", ".wav": "audio", ".flac": "audio", ".ogg": "audio",
+    ".aac": "audio", ".wma": "audio", ".m4a": "audio",
+    ".txt": "text", ".md": "text", ".py": "text", ".json": "text",
+    ".xml": "text", ".html": "text", ".css": "text", ".js": "text",
+    ".yaml": "text", ".yml": "text", ".cfg": "text", ".ini": "text",
+    ".log": "text", ".csv": "text", ".toml": "text", ".rst": "text",
+    ".bat": "text", ".sh": "text", ".ps1": "text",
+}
 
 EXTENSION_OPTIONS = [
     (".blend", "Blender"),
@@ -149,12 +168,18 @@ class NewProjectDialog(QDialog):
 class NodeDetailDialog(QDialog):
     preview_changed = pyqtSignal(str)
 
+    PG_EMPTY, PG_IMAGE, PG_VIDEO, PG_AUDIO, PG_TEXT = range(5)
+
     def __init__(self, node, storage, parent=None):
         super().__init__(parent)
         self._node = node
         self._storage = storage
+        self._current_preview_type = None
+        self._video_player: QMediaPlayer | None = None
+        self._audio_player: QMediaPlayer | None = None
+
         self.setWindowTitle(f"节点详情 - {node.filename}")
-        self.setMinimumSize(500, 460)
+        self.setMinimumSize(550, 520)
         self.setModal(False)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
 
@@ -201,12 +226,93 @@ class NodeDetailDialog(QDialog):
 
         preview_group = QGroupBox("预览")
         preview_layout = QVBoxLayout(preview_group)
+        preview_layout.setSpacing(8)
 
-        self._preview_label = QLabel()
-        self._preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._preview_label.setMinimumHeight(120)
-        self._preview_label.setStyleSheet("background-color: #1e1e1e; border-radius: 6px;")
-        preview_layout.addWidget(self._preview_label)
+        self._preview_stack = QStackedWidget()
+        self._preview_stack.setMinimumHeight(200)
+        self._preview_stack.setMaximumHeight(340)
+        self._preview_stack.setStyleSheet("QStackedWidget { background-color: #1e1e1e; border-radius: 6px; }")
+
+        # Page 0: Empty
+        empty_w = QWidget()
+        empty_l = QVBoxLayout(empty_w)
+        self._empty_label = QLabel("无预览")
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_label.setStyleSheet("color: #666; font-size: 14px;")
+        empty_l.addWidget(self._empty_label)
+        self._preview_stack.addWidget(empty_w)
+
+        # Page 1: Image
+        self._image_scroll = QScrollArea()
+        self._image_scroll.setWidgetResizable(True)
+        self._image_scroll.setStyleSheet("QScrollArea { background-color: #1e1e1e; border: none; }")
+        self._image_label = QLabel()
+        self._image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._image_scroll.setWidget(self._image_label)
+        self._preview_stack.addWidget(self._image_scroll)
+
+        # Page 2: Video
+        video_w = QWidget()
+        video_l = QVBoxLayout(video_w)
+        video_l.setContentsMargins(0, 0, 0, 0)
+        video_l.setSpacing(6)
+        self._video_widget = QVideoWidget()
+        self._video_widget.setMinimumHeight(180)
+        self._video_widget.setMaximumHeight(260)
+        video_l.addWidget(self._video_widget, 1)
+        vctrl = QHBoxLayout()
+        self._v_play_btn = QPushButton("播放")
+        self._v_play_btn.clicked.connect(self._toggle_video)
+        vctrl.addWidget(self._v_play_btn)
+        self._v_seek = QSlider(Qt.Orientation.Horizontal)
+        self._v_seek.setRange(0, 0)
+        self._v_seek.sliderMoved.connect(self._seek_video)
+        vctrl.addWidget(self._v_seek, 1)
+        self._v_time = QLabel("00:00 / 00:00")
+        self._v_time.setStyleSheet("color: #aaa; font-size: 11px;")
+        self._v_time.setFixedWidth(110)
+        vctrl.addWidget(self._v_time)
+        video_l.addLayout(vctrl)
+        self._preview_stack.addWidget(video_w)
+
+        # Page 3: Audio
+        audio_w = QWidget()
+        audio_l = QVBoxLayout(audio_w)
+        audio_l.setContentsMargins(16, 16, 16, 16)
+        audio_l.setSpacing(10)
+        self._audio_visual = QLabel("🎵 音频预览")
+        self._audio_visual.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._audio_visual.setMinimumHeight(100)
+        self._audio_visual.setStyleSheet(
+            "background-color: #2d2d2d; border-radius: 8px; color: #888; font-size: 20px;"
+        )
+        audio_l.addWidget(self._audio_visual)
+        actrl = QHBoxLayout()
+        self._a_play_btn = QPushButton("播放")
+        self._a_play_btn.clicked.connect(self._toggle_audio)
+        actrl.addWidget(self._a_play_btn)
+        self._a_seek = QSlider(Qt.Orientation.Horizontal)
+        self._a_seek.setRange(0, 0)
+        self._a_seek.sliderMoved.connect(self._seek_audio)
+        actrl.addWidget(self._a_seek, 1)
+        self._a_time = QLabel("00:00 / 00:00")
+        self._a_time.setStyleSheet("color: #aaa; font-size: 11px;")
+        self._a_time.setFixedWidth(110)
+        actrl.addWidget(self._a_time)
+        audio_l.addLayout(actrl)
+        self._preview_stack.addWidget(audio_w)
+
+        # Page 4: Text
+        self._text_view = QPlainTextEdit()
+        self._text_view.setReadOnly(True)
+        self._text_view.setStyleSheet(
+            "QPlainTextEdit { background-color: #1e1e1e; color: #d4d4d4;"
+            " font-family: 'Consolas', 'Courier New', monospace; font-size: 12px;"
+            " border: none; }"
+        )
+        self._preview_stack.addWidget(self._text_view)
+
+        preview_layout.addWidget(self._preview_stack)
 
         preview_btns = QHBoxLayout()
         upload_btn = QPushButton("上传预览")
@@ -245,27 +351,82 @@ class NodeDetailDialog(QDialog):
         self._desc_edit.setPlainText(self._node.description)
 
         preview_path = self._storage.get_preview_path(self._node.id)
-        if preview_path:
+        if preview_path and os.path.isfile(preview_path):
             self._show_preview(preview_path)
+        else:
+            self._preview_stack.setCurrentIndex(self.PG_EMPTY)
+
+    def _detect_type(self, path: str) -> str:
+        ext = os.path.splitext(path)[1].lower()
+        return PREVIEW_TYPE.get(ext, "")
 
     def _show_preview(self, path: str):
-        pixmap = QPixmap(path)
-        if not pixmap.isNull():
-            scaled = pixmap.scaled(
-                QSize(320, 200),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            self._preview_label.setPixmap(scaled)
+        ptype = self._detect_type(path)
+        self._stop_media()
+        self._current_preview_type = ptype
 
-    def _save_description(self):
-        self._node.description = self._desc_edit.toPlainText().strip()
-        self._storage.update_node(self._node)
+        if ptype == "image":
+            pixmap = QPixmap(path)
+            if not pixmap.isNull():
+                self._image_label.setPixmap(pixmap.scaled(
+                    QSize(400, 280),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                ))
+                self._preview_stack.setCurrentIndex(self.PG_IMAGE)
+                return
+        elif ptype == "video":
+            self._video_player = QMediaPlayer()
+            self._v_audio = QAudioOutput()
+            self._video_player.setAudioOutput(self._v_audio)
+            self._video_player.setVideoOutput(self._video_widget)
+            self._video_player.setSource(QUrl.fromLocalFile(path))
+            self._video_player.positionChanged.connect(self._v_position_changed)
+            self._video_player.durationChanged.connect(self._v_duration_changed)
+            self._video_player.playbackStateChanged.connect(self._v_state_changed)
+            self._v_seek.setRange(0, 0)
+            self._v_time.setText("00:00 / 00:00")
+            self._preview_stack.setCurrentIndex(self.PG_VIDEO)
+            return
+        elif ptype == "audio":
+            self._audio_player = QMediaPlayer()
+            self._a_output = QAudioOutput()
+            self._audio_player.setAudioOutput(self._a_output)
+            self._audio_player.setSource(QUrl.fromLocalFile(path))
+            self._audio_player.positionChanged.connect(self._a_position_changed)
+            self._audio_player.durationChanged.connect(self._a_duration_changed)
+            self._audio_player.playbackStateChanged.connect(self._a_state_changed)
+            self._a_seek.setRange(0, 0)
+            self._a_time.setText("00:00 / 00:00")
+            self._preview_stack.setCurrentIndex(self.PG_AUDIO)
+            return
+        elif ptype == "text":
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read(100000)  # limit 100KB
+                self._text_view.setPlainText(content)
+                self._preview_stack.setCurrentIndex(self.PG_TEXT)
+                return
+            except (OSError, UnicodeDecodeError):
+                pass
+
+        # Fallback
+        self._preview_stack.setCurrentIndex(self.PG_EMPTY)
 
     def _upload_preview(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self, "选择预览文件", "",
-            "图片/视频 (*.png *.jpg *.jpeg *.gif *.bmp *.webp *.mp4 *.mov *.avi)"
+            "所有支持格式 (*.png *.jpg *.jpeg *.gif *.bmp *.webp"
+            " *.mp4 *.mov *.avi *.webm *.mkv *.wmv *.flv"
+            " *.mp3 *.wav *.flac *.ogg *.aac *.wma *.m4a"
+            " *.txt *.md *.py *.json *.xml *.html *.css"
+            " *.js *.yaml *.yml *.cfg *.ini *.log *.csv"
+            " *.toml *.rst *.bat *.sh *.ps1);;"
+            "图片 (*.png *.jpg *.jpeg *.gif *.bmp *.webp);;"
+            "视频 (*.mp4 *.mov *.avi *.webm *.mkv *.wmv);;"
+            "音频 (*.mp3 *.wav *.flac *.ogg *.aac *.wma);;"
+            "文本 (*.txt *.md *.py *.json *.xml *.html *.css *.js *.yaml *.yml *.csv *.log);;"
+            "所有文件 (*)"
         )
         if file_path:
             preview_path = self._storage.import_preview(self._node.id, file_path)
@@ -273,18 +434,135 @@ class NodeDetailDialog(QDialog):
             self._storage.update_node(self._node)
             self._show_preview(preview_path)
 
+    def _delete_preview(self):
+        # Switch away from media pages FIRST so widgets stop painting
+        self._preview_stack.setCurrentIndex(self.PG_EMPTY)
+        # Release file handles before deleting files on disk
+        self._release_media()
+        self._storage.remove_preview(self._node.id)
+        self._node.preview_path = ""
+        self._storage.update_node(self._node)
+        self._current_preview_type = None
+        # Now safe to destroy players
+        self._destroy_players()
+
+    # ---- media controls ----
+    def _release_media(self):
+        """Stop playback and release file handles, keep players alive."""
+        if self._video_player:
+            self._video_player.blockSignals(True)
+            self._video_player.stop()
+            self._video_player.setSource(QUrl())
+            self._video_player.setVideoOutput(None)
+        if self._audio_player:
+            self._audio_player.blockSignals(True)
+            self._audio_player.stop()
+            self._audio_player.setSource(QUrl())
+
+    def _destroy_players(self):
+        if self._video_player:
+            try:
+                self._video_player.positionChanged.disconnect()
+                self._video_player.durationChanged.disconnect()
+                self._video_player.playbackStateChanged.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+            self._video_player.deleteLater()
+            self._video_player = None
+        if self._audio_player:
+            try:
+                self._audio_player.positionChanged.disconnect()
+                self._audio_player.durationChanged.disconnect()
+                self._audio_player.playbackStateChanged.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+            self._audio_player.deleteLater()
+            self._audio_player = None
+        self._v_play_btn.setText("播放")
+        self._a_play_btn.setText("播放")
+
+    def _stop_media(self):
+        self._release_media()
+        self._destroy_players()
+
+    def _toggle_video(self):
+        if not self._video_player:
+            return
+        if self._video_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self._video_player.pause()
+        else:
+            self._video_player.play()
+
+    def _seek_video(self, pos: int):
+        if self._video_player:
+            self._video_player.setPosition(pos)
+
+    def _v_position_changed(self, pos: int):
+        self._v_seek.blockSignals(True)
+        self._v_seek.setValue(pos)
+        self._v_seek.blockSignals(False)
+        dur = self._video_player.duration() if self._video_player else 0
+        self._v_time.setText(f"{self._fmt_time(pos)} / {self._fmt_time(dur)}")
+
+    def _v_duration_changed(self, dur: int):
+        self._v_seek.setRange(0, dur)
+        self._v_time.setText(f"00:00 / {self._fmt_time(dur)}")
+
+    def _v_state_changed(self, state):
+        if state == QMediaPlayer.PlaybackState.PlayingState:
+            self._v_play_btn.setText("暂停")
+        else:
+            self._v_play_btn.setText("播放")
+
+    def _toggle_audio(self):
+        if not self._audio_player:
+            return
+        if self._audio_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self._audio_player.pause()
+        else:
+            self._audio_player.play()
+
+    def _seek_audio(self, pos: int):
+        if self._audio_player:
+            self._audio_player.setPosition(pos)
+
+    def _a_position_changed(self, pos: int):
+        self._a_seek.blockSignals(True)
+        self._a_seek.setValue(pos)
+        self._a_seek.blockSignals(False)
+        dur = self._audio_player.duration() if self._audio_player else 0
+        self._a_time.setText(f"{self._fmt_time(pos)} / {self._fmt_time(dur)}")
+
+    def _a_duration_changed(self, dur: int):
+        self._a_seek.setRange(0, dur)
+        self._a_time.setText(f"00:00 / {self._fmt_time(dur)}")
+
+    def _a_state_changed(self, state):
+        if state == QMediaPlayer.PlaybackState.PlayingState:
+            self._a_play_btn.setText("暂停")
+        else:
+            self._a_play_btn.setText("播放")
+
+    @staticmethod
+    def _fmt_time(ms: int) -> str:
+        s = ms // 1000
+        m, s = divmod(s, 60)
+        return f"{m:02d}:{s:02d}"
+
+    def closeEvent(self, event):
+        self._preview_stack.setCurrentIndex(self.PG_EMPTY)
+        self._stop_media()
+        super().closeEvent(event)
+
+    def _save_description(self):
+        self._node.description = self._desc_edit.toPlainText().strip()
+        self._storage.update_node(self._node)
+
     def _open_file_location(self):
         if self._node.file_path and os.path.isfile(self._node.file_path):
             folder = os.path.dirname(self._node.file_path)
             if os.path.isdir(folder):
                 subprocess.Popen(["explorer", "/select,", self._node.file_path])
-
-    def _delete_preview(self):
-        self._storage.remove_preview(self._node.id)
-        self._node.preview_path = ""
-        self._storage.update_node(self._node)
-        self._preview_label.clear()
-        self._preview_label.setText("无预览")
 
 
 class DescriptionDialog(QDialog):

@@ -105,8 +105,17 @@ class ProjectStorage:
         shutil.copy2(source_path, dest_path)
         return dest_path
 
+    PREVIEW_EXTENSIONS = (
+        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp",
+        ".mp4", ".mov", ".avi", ".webm", ".mkv", ".wmv", ".flv",
+        ".mp3", ".wav", ".flac", ".ogg", ".aac", ".wma", ".m4a",
+        ".txt", ".md", ".py", ".json", ".xml", ".html", ".css",
+        ".js", ".yaml", ".yml", ".cfg", ".ini", ".log", ".csv",
+        ".toml", ".rst", ".bat", ".sh", ".ps1",
+    )
+
     def get_preview_path(self, node_id: str) -> str:
-        for ext in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".mp4", ".mov", ".avi"):
+        for ext in self.PREVIEW_EXTENSIONS:
             p = os.path.join(self._previews, node_id, f"preview{ext}")
             if os.path.isfile(p):
                 return p
