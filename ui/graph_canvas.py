@@ -4,6 +4,7 @@ from PyQt6.QtCore import QPointF, Qt, pyqtSignal, QPoint
 from PyQt6.QtGui import (
     QBrush,
     QColor,
+    QFont,
     QMouseEvent,
     QPainter,
     QPen,
@@ -11,6 +12,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QGraphicsScene,
+    QGraphicsTextItem,
     QGraphicsView,
     QMenu,
 )
@@ -43,6 +45,7 @@ class GraphCanvas(QGraphicsView):
     merge_requested = pyqtSignal(list)
     delete_node_requested = pyqtSignal(str)
     edit_description_requested = pyqtSignal(str)
+    drag_status = pyqtSignal(str)
 
     MIN_ZOOM = 0.1
     MAX_ZOOM = 3.0
@@ -58,6 +61,9 @@ class GraphCanvas(QGraphicsView):
         self._node_items: dict[str, NodeItem] = {}
         self._edge_items: list[EdgeItem] = []
         self._selected_ids: set[str] = set()
+        self._drag_target: NodeItem | None = None
+        self._drag_mode: str | None = None
+        self._drag_hint: QGraphicsTextItem | None = None
 
         self.setRenderHints(
             QPainter.RenderHint.Antialiasing
@@ -109,20 +115,27 @@ class GraphCanvas(QGraphicsView):
     # ---- drag & drop ----
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
+            self._update_drag_feedback(event)
             event.acceptProposedAction()
         else:
             super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event):
         if event.mimeData().hasUrls():
+            self._update_drag_feedback(event)
             event.acceptProposedAction()
         else:
             super().dragMoveEvent(event)
+
+    def dragLeaveEvent(self, event):
+        self._clear_drag_feedback()
+        super().dragLeaveEvent(event)
 
     def dropEvent(self, event):
         if event.mimeData().hasUrls():
             scene_pos = self.mapToScene(event.position().toPoint())
             item = self._scene.itemAt(scene_pos, self.transform())
+            self._clear_drag_feedback()
             if isinstance(item, NodeItem):
                 for url in event.mimeData().urls():
                     file_path = url.toLocalFile()
@@ -136,6 +149,85 @@ class GraphCanvas(QGraphicsView):
             event.acceptProposedAction()
         else:
             super().dropEvent(event)
+
+    def _has_outgoing_edges(self, node_id: str) -> bool:
+        for ei in self._edge_items:
+            if ei._source == self._node_items[node_id].connection_point_right():
+                return True
+        return False
+
+    def _update_drag_feedback(self, event):
+        scene_pos = self.mapToScene(event.position().toPoint())
+        item = self._scene.itemAt(scene_pos, self.transform())
+
+        # Clear previous
+        if self._drag_target and self._drag_target is not item:
+            self._drag_target.setDropHighlight(None)
+            self._drag_target = None
+            self._drag_mode = None
+
+        hint_text = ""
+
+        if isinstance(item, NodeItem):
+            nid = item.node_id
+            if self._has_outgoing_edges(nid):
+                mode = "branch"
+                hint_text = "在此节点后分出新的分支"
+            else:
+                mode = "append"
+                hint_text = "追加到此分支末尾"
+            if self._drag_target is not item or self._drag_mode != mode:
+                if self._drag_target:
+                    self._drag_target.setDropHighlight(None)
+                item.setDropHighlight(mode)
+                self._drag_target = item
+                self._drag_mode = mode
+                self.drag_status.emit(hint_text)
+        else:
+            if self._drag_target:
+                self._drag_target.setDropHighlight(None)
+                self._drag_target = None
+                self._drag_mode = None
+            hint_text = "创建独立分支起点"
+            self.drag_status.emit(hint_text)
+
+        # Floating hint near cursor
+        self._update_drag_hint(scene_pos, hint_text)
+
+    def _update_drag_hint(self, scene_pos: QPointF, text: str):
+        if not text:
+            if self._drag_hint:
+                self._scene.removeItem(self._drag_hint)
+                self._drag_hint = None
+            return
+
+        if self._drag_hint is None:
+            self._drag_hint = QGraphicsTextItem()
+            self._drag_hint.setZValue(1000)
+            self._drag_hint.setDefaultTextColor(QColor("#ffffff"))
+            font = QFont("Segoe UI", 11, QFont.Weight.Bold)
+            self._drag_hint.setFont(font)
+            self._scene.addItem(self._drag_hint)
+
+        self._drag_hint.setPlainText(text)
+        # Position to the right and below the cursor
+        self._drag_hint.setPos(scene_pos.x() + 20, scene_pos.y() + 10)
+        # Background for readability
+        self._drag_hint.setHtml(
+            f'<div style="background-color: rgba(30,30,30,200); '
+            f'padding: 4px 10px; border-radius: 6px; '
+            f'border: 1px solid #555;">{text}</div>'
+        )
+
+    def _clear_drag_feedback(self):
+        if self._drag_target:
+            self._drag_target.setDropHighlight(None)
+            self._drag_target = None
+            self._drag_mode = None
+        if self._drag_hint:
+            self._scene.removeItem(self._drag_hint)
+            self._drag_hint = None
+        self.drag_status.emit("")
 
     # ---- selection ----
     def _on_node_clicked(self, node_id: str):

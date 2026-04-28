@@ -144,6 +144,7 @@ class MainWindow(QMainWindow):
         self._canvas.merge_requested.connect(self._on_merge_requested)
         self._canvas.delete_node_requested.connect(self._on_delete_node)
         self._canvas.edit_description_requested.connect(self._on_edit_description)
+        self._canvas.drag_status.connect(self._on_drag_status)
         splitter.addWidget(self._canvas)
 
         self._file_panel = FilePanel()
@@ -348,6 +349,9 @@ class MainWindow(QMainWindow):
         new_node.description = desc_dlg.description()
         self._storage.add_node(new_node)
         self._refresh_from_storage()
+
+    def _on_drag_status(self, msg: str):
+        self._status_bar.showMessage(msg, 0) if msg else self._status_bar.clearMessage()
 
     # ---- node interactions ----
     def _on_node_clicked(self, node_id: str):

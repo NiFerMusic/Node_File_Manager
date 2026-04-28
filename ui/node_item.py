@@ -59,6 +59,7 @@ class NodeItem(QGraphicsObject):
         self._width = NODE_WIDTH
         self._height = NODE_MIN_HEIGHT
         self._highlighted = False
+        self._drop_mode = None
         self._hovered = False
         self._accent = self._color_for_ext(node_data.ext)
 
@@ -124,7 +125,11 @@ class NodeItem(QGraphicsObject):
         painter.fillPath(bar_path, self._accent)
 
         # Border
-        if self._highlighted:
+        if self._drop_mode == "append":
+            pen = QPen(QColor("#4ec9b0"), 3)
+        elif self._drop_mode == "branch":
+            pen = QPen(QColor("#dcdcaa"), 3)
+        elif self._highlighted:
             pen = QPen(QColor("#007acc"), 2)
         elif self._hovered:
             pen = QPen(QColor("#555"), 1.5)
@@ -133,6 +138,20 @@ class NodeItem(QGraphicsObject):
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(r, corner, corner)
+
+        # Drop mode label
+        if self._drop_mode:
+            label_font = QFont("Segoe UI", 8)
+            label_font.setBold(True)
+            painter.setFont(label_font)
+            if self._drop_mode == "append":
+                painter.setPen(QColor("#4ec9b0"))
+                label = "+ 追加到末尾"
+            else:
+                painter.setPen(QColor("#dcdcaa"))
+                label = "↳ 从此分支"
+            label_rect = QRectF(r.left() + 14, r.bottom() - 24, r.width() - 28, 18)
+            painter.drawText(label_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, label)
 
         # Main: description (or filename if no description)
         name_font = QFont("Segoe UI", 11)
@@ -211,6 +230,10 @@ class NodeItem(QGraphicsObject):
 
     def setHighlighted(self, on: bool):
         self._highlighted = on
+        self.update()
+
+    def setDropHighlight(self, mode: str | None):
+        self._drop_mode = mode
         self.update()
 
     @property
