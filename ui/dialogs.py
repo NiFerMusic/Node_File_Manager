@@ -183,7 +183,7 @@ class NodeDetailDialog(QDialog):
         self._audio_player: QMediaPlayer | None = None
 
         self.setWindowTitle(f"节点详情 - {node.filename}")
-        self.setMinimumSize(550, 520)
+        self.setMinimumSize(480, 300)
         self.setModal(False)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
 
@@ -191,7 +191,16 @@ class NodeDetailDialog(QDialog):
         self._load_data()
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
+        # Wrap everything in a scroll area so the dialog works on short screens
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setSpacing(12)
         layout.setContentsMargins(20, 20, 20, 20)
 
@@ -233,8 +242,8 @@ class NodeDetailDialog(QDialog):
         preview_layout.setSpacing(8)
 
         self._preview_stack = QStackedWidget()
-        self._preview_stack.setMinimumHeight(200)
-        self._preview_stack.setMaximumHeight(340)
+        self._preview_stack.setMinimumHeight(180)
+        self._preview_stack.setMaximumHeight(300)
         self._preview_stack.setStyleSheet("QStackedWidget { background-color: #1e1e1e; border-radius: 6px; }")
 
         # Page 0: Empty
@@ -350,6 +359,10 @@ class NodeDetailDialog(QDialog):
         btn_row.addWidget(close_btn)
 
         layout.addLayout(btn_row)
+        layout.addStretch()
+
+        scroll.setWidget(content)
+        outer_layout.addWidget(scroll)
 
     def _load_data(self):
         self._filename_label.setText(self._node.filename)
