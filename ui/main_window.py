@@ -37,6 +37,8 @@ class MainWindow(QMainWindow):
         self._storage: ProjectStorage | None = None
         self._nodes: list[Node] = []
         self._edges: list[Edge] = []
+        self._undo_stack: list[tuple[list[dict], list[dict]]] = []
+        self._undoing = False
 
         self.setWindowTitle("Visual Version Tree")
         self.setMinimumSize(1000, 650)
@@ -75,6 +77,13 @@ class MainWindow(QMainWindow):
         exit_action.setShortcut(QKeySequence("Ctrl+Q"))
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
+
+        edit_menu = menu_bar.addMenu("编辑(&E)")
+
+        undo_action = QAction("撤销", self)
+        undo_action.setShortcut(QKeySequence("Ctrl+Z"))
+        undo_action.triggered.connect(self._undo)
+        edit_menu.addAction(undo_action)
 
         view_menu = menu_bar.addMenu("视图(&V)")
 
@@ -182,6 +191,7 @@ class MainWindow(QMainWindow):
         self._project = project
         self._nodes = []
         self._edges = []
+        self._undo_stack.clear()
 
         self._update_title()
         self._file_panel.set_project(root_path, exts)
@@ -206,6 +216,7 @@ class MainWindow(QMainWindow):
         self._project = project
         self._nodes = self._storage.load_nodes()
         self._edges = self._storage.load_edges()
+        self._undo_stack.clear()
 
         self._update_title()
         tracked_paths = {n.file_path for n in self._nodes if n.file_path}
@@ -220,6 +231,7 @@ class MainWindow(QMainWindow):
         self._storage = None
         self._nodes = []
         self._edges = []
+        self._undo_stack.clear()
         self._canvas.rebuild([], [])
         self._file_panel.set_project("", [])
         self.setWindowTitle("Visual Version Tree")
@@ -376,13 +388,33 @@ class MainWindow(QMainWindow):
     def _refresh_from_storage(self):
         if not self._storage:
             return
-        self._nodes = self._storage.load_nodes()
-        self._edges = self._storage.load_edges()
+        new_nodes = self._storage.load_nodes()
+        new_edges = self._storage.load_edges()
+        if not self._undoing and (new_nodes != self._nodes or new_edges != self._edges):
+            self._push_undo()
+        self._nodes = new_nodes
+        self._edges = new_edges
         tracked_paths = {n.file_path for n in self._nodes if n.file_path}
         self._file_panel.set_tracked_paths(tracked_paths)
         self._file_panel.refresh()
         self._rebuild_graph()
         self._update_status()
+
+    def _push_undo(self):
+        self._undo_stack.append(([n.to_dict() for n in self._nodes],
+                                 [e.to_dict() for e in self._edges]))
+        if len(self._undo_stack) > 50:
+            self._undo_stack.pop(0)
+
+    def _undo(self):
+        if not self._storage or not self._undo_stack:
+            return
+        nodes_data, edges_data = self._undo_stack.pop()
+        self._storage.save_nodes([Node.from_dict(d) for d in nodes_data])
+        self._storage.save_edges([Edge.from_dict(d) for d in edges_data])
+        self._undoing = True
+        self._refresh_from_storage()
+        self._undoing = False
 
     def _rebuild_graph(self):
         self._canvas.rebuild(self._nodes, self._edges)
