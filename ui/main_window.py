@@ -362,8 +362,10 @@ class MainWindow(QMainWindow):
             return
         node = self._storage.get_node(node_id)
         if node:
-            dlg = NodeDetailDialog(node, self._storage, self)
+            untracked = self._file_panel.untracked_files()
+            dlg = NodeDetailDialog(node, self._storage, self, untracked_files=untracked)
             dlg.finished.connect(lambda: self._refresh_from_storage())
+            dlg.node_relocated.connect(lambda nid: self._refresh_from_storage())
             dlg.show()
 
     def _on_file_double_clicked(self, file_path: str):

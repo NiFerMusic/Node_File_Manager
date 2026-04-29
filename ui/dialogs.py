@@ -5,6 +5,8 @@ import subprocess
 from datetime import datetime
 
 from PyQt6.QtCore import Qt, QSize, QUrl, pyqtSignal
+
+from core.models import Node
 from PyQt6.QtGui import QFont, QPixmap
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QVideoWidget
@@ -167,13 +169,15 @@ class NewProjectDialog(QDialog):
 
 class NodeDetailDialog(QDialog):
     preview_changed = pyqtSignal(str)
+    node_relocated = pyqtSignal(str)
 
     PG_EMPTY, PG_IMAGE, PG_VIDEO, PG_AUDIO, PG_TEXT = range(5)
 
-    def __init__(self, node, storage, parent=None):
+    def __init__(self, node, storage, parent=None, untracked_files: list[str] | None = None):
         super().__init__(parent)
         self._node = node
         self._storage = storage
+        self._untracked_files = untracked_files or []
         self._current_preview_type = None
         self._video_player: QMediaPlayer | None = None
         self._audio_player: QMediaPlayer | None = None
@@ -334,6 +338,11 @@ class NodeDetailDialog(QDialog):
         open_btn.clicked.connect(self._open_file_location)
         btn_row.addWidget(open_btn)
 
+        self._relocate_btn = QPushButton("重新定位")
+        self._relocate_btn.setVisible(False)
+        self._relocate_btn.clicked.connect(self._relocate_file)
+        btn_row.addWidget(self._relocate_btn)
+
         btn_row.addStretch()
 
         close_btn = QPushButton("关闭")
@@ -349,6 +358,8 @@ class NodeDetailDialog(QDialog):
         self._date_label.setText(dt.strftime("%Y-%m-%d %H:%M:%S"))
         self._type_label.setText("合并节点" if self._node.node_type == "merge" else "文件节点")
         self._desc_edit.setPlainText(self._node.description)
+
+        self._relocate_btn.setVisible(not self._node.file_exists)
 
         preview_path = self._storage.get_preview_path(self._node.id)
         if preview_path and os.path.isfile(preview_path):
@@ -564,6 +575,36 @@ class NodeDetailDialog(QDialog):
             if os.path.isdir(folder):
                 subprocess.Popen(["explorer", "/select,", self._node.file_path])
 
+    def _relocate_file(self):
+        if not self._untracked_files:
+            QMessageBox.warning(self, "提示", "没有可用的未追踪文件。")
+            return
+
+        dlg = MergeFileDialog(self._untracked_files, self, title="选择重新定位的文件")
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        new_path = dlg.selected_file()
+        if not new_path:
+            return
+
+        try:
+            new_info = Node.from_file(new_path)
+        except OSError as e:
+            QMessageBox.warning(self, "错误", f"无法读取文件: {e}")
+            return
+
+        self._node.file_path = new_info.file_path
+        self._node.filename = new_info.filename
+        self._node.last_modified = new_info.last_modified
+        self._node.created_at = new_info.created_at
+
+        self._storage.update_node(self._node)
+
+        self._load_data()
+        self.setWindowTitle(f"节点详情 - {self._node.filename}")
+
+        self.node_relocated.emit(self._node.id)
+
 
 class DescriptionDialog(QDialog):
     def __init__(self, filename: str, parent=None):
@@ -596,9 +637,9 @@ class DescriptionDialog(QDialog):
 
 
 class MergeFileDialog(QDialog):
-    def __init__(self, untracked_files: list[str], parent=None):
+    def __init__(self, untracked_files: list[str], parent=None, title: str = "选择合并结果文件"):
         super().__init__(parent)
-        self.setWindowTitle("选择合并结果文件")
+        self.setWindowTitle(title)
         self.setMinimumSize(500, 350)
         self.setModal(True)
         self._files = untracked_files

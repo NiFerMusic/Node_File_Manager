@@ -50,6 +50,10 @@ class Node:
     def ext(self) -> str:
         return os.path.splitext(self.filename)[1].lower()
 
+    @property
+    def file_exists(self) -> bool:
+        return os.path.isfile(self.file_path)
+
     def to_dict(self) -> dict:
         return {
             "id": self.id,

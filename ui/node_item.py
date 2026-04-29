@@ -46,6 +46,7 @@ EXTENSION_COLORS = {
 NODE_WIDTH = 200
 NODE_MIN_HEIGHT = 80
 DESC_MAX_WIDTH = 190
+MISSING_FILE_COLOR = QColor("#f44747")
 
 
 class NodeItem(QGraphicsObject):
@@ -62,6 +63,8 @@ class NodeItem(QGraphicsObject):
         self._drop_mode = None
         self._hovered = False
         self._accent = self._color_for_ext(node_data.ext)
+        if not node_data.file_exists:
+            self._accent = MISSING_FILE_COLOR
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
@@ -247,6 +250,8 @@ class NodeItem(QGraphicsObject):
     def set_node_data(self, data):
         self._data = data
         self._accent = self._color_for_ext(data.ext)
+        if not data.file_exists:
+            self._accent = MISSING_FILE_COLOR
         self._compute_height()
         self.prepareGeometryChange()
         self.update()
