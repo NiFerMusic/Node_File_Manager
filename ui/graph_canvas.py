@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import QPointF, Qt, pyqtSignal, QPoint
+from PyQt6.QtCore import (
+    QPointF, Qt, pyqtSignal, QPoint, QPropertyAnimation, QEasingCurve, pyqtProperty, QTimer,
+)
 from PyQt6.QtGui import (
     QBrush,
     QColor,
@@ -26,7 +28,7 @@ class GraphScene(QGraphicsScene):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setBackgroundBrush(QBrush(QColor("#1e1e1e")))
-        self._grid_pen = QPen(QColor("#2a2a2a"), 0.5)
+        self._grid_pen = QPen(QColor("#1e1e1e"), 0.5)
         self._draw_grid()
 
     def _draw_grid(self):
@@ -64,6 +66,7 @@ class GraphCanvas(QGraphicsView):
         self._drag_target: NodeItem | None = None
         self._drag_mode: str | None = None
         self._drag_hint: QGraphicsTextItem | None = None
+        self._active_anims: list = []
 
         self.setRenderHints(
             QPainter.RenderHint.Antialiasing
@@ -78,7 +81,12 @@ class GraphCanvas(QGraphicsView):
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setAcceptDrops(True)
 
-    def rebuild(self, nodes: list, edges: list):
+    def rebuild(self, nodes: list, edges: list, animate: bool = False):
+        # Save old positions before clearing
+        old_positions: dict[str, QPointF] = {
+            nid: item.pos() for nid, item in self._node_items.items()
+        }
+
         self._scene.clearSelection()
         self._selected_ids.clear()
         for ei in self._edge_items:
@@ -91,18 +99,71 @@ class GraphCanvas(QGraphicsView):
         self._scene._draw_grid()
 
         positions = compute_layout(nodes, edges)
+        self._stored_edges = edges  # keep for edge refresh during animation
+        moved_items: list[NodeItem] = []
+        new_items: list[NodeItem] = []
 
         for n in nodes:
             item = NodeItem(n)
-            pos = positions.get(n.id, (0, 0))
-            item.setPos(QPointF(pos[0], pos[1]))
+            target = QPointF(*positions.get(n.id, (0, 0)))
+
+            if n.id in old_positions:
+                if not animate and old_positions[n.id] != target:
+                    item.setPos(old_positions[n.id])
+                    moved_items.append(item)
+                else:
+                    item.setPos(target)
+            else:
+                item.setPos(target)
+                if not animate:
+                    new_items.append(item)
+
             item.node_clicked.connect(self._on_node_clicked)
             item.node_double_clicked.connect(self.node_double_clicked.emit)
             item.node_context_menu.connect(self._on_node_context_menu)
             self._scene.addItem(item)
             self._node_items[n.id] = item
 
-        for e in edges:
+        # Create edges immediately
+        self._build_edges()
+
+        # Position animations for moved nodes — edges follow via valueChanged
+        for item in moved_items:
+            nid = item.node_id
+            target = QPointF(*positions[nid])
+            anim = QPropertyAnimation(item, b"nodePos")
+            anim.setDuration(300)
+            anim.setStartValue(item.pos())
+            anim.setEndValue(target)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim.valueChanged.connect(self._refresh_all_edges)
+            self._active_anims.append(anim)
+            anim.finished.connect(lambda a=anim: self._active_anims.remove(a) if a in self._active_anims else None)
+            anim.start()
+
+        # Scale-in appear for newly added nodes
+        for i, item in enumerate(new_items):
+            anim = item.animate_appear()
+            self._active_anims.append(anim)
+            anim.finished.connect(lambda a=anim: self._active_anims.remove(a) if a in self._active_anims else None)
+            QTimer.singleShot(i * 40, anim.start)
+
+        # Project-load stagger appear for all nodes
+        if animate and 0 < len(nodes) <= 40:
+            for i, n in enumerate(nodes):
+                item = self._node_items.get(n.id)
+                if item is None:
+                    continue
+                anim = item.animate_appear()
+                self._active_anims.append(anim)
+                anim.finished.connect(lambda a=anim: self._active_anims.remove(a) if a in self._active_anims else None)
+                QTimer.singleShot(i * 35, anim.start)
+
+    def _build_edges(self):
+        """Create edges from stored edge data using current node positions."""
+        if not hasattr(self, '_stored_edges'):
+            return
+        for e in self._stored_edges:
             src_item = self._node_items.get(e.source_id)
             tgt_item = self._node_items.get(e.target_id)
             if src_item and tgt_item:
@@ -111,6 +172,51 @@ class GraphCanvas(QGraphicsView):
                 ei = EdgeItem(sp, tp)
                 self._scene.addItem(ei)
                 self._edge_items.append(ei)
+
+    def _refresh_all_edges(self, *_):
+        """Update all edge endpoints in-place during node position animation."""
+        if not hasattr(self, '_stored_edges'):
+            return
+        for i, e in enumerate(self._stored_edges):
+            if i < len(self._edge_items):
+                src_item = self._node_items.get(e.source_id)
+                tgt_item = self._node_items.get(e.target_id)
+                if src_item and tgt_item:
+                    sp = src_item.connection_point_right()
+                    tp = tgt_item.connection_point_left()
+                    self._edge_items[i].update_endpoints(sp, tp)
+
+    def animate_remove_node(self, node_id: str, on_finished):
+        # Only remove edges connected to the node being deleted
+        if hasattr(self, '_stored_edges'):
+            to_remove = []
+            for i, e in enumerate(self._stored_edges):
+                if e.source_id == node_id or e.target_id == node_id:
+                    if i < len(self._edge_items):
+                        self._scene.removeItem(self._edge_items[i])
+                    to_remove.append(i)
+            # Remove from edge_items in reverse order to preserve indices
+            for i in reversed(to_remove):
+                del self._edge_items[i]
+            # Remove from stored edges
+            self._stored_edges = [e for e in self._stored_edges
+                                  if e.source_id != node_id and e.target_id != node_id]
+
+        item = self._node_items.get(node_id)
+        if item is None:
+            on_finished()
+            return
+
+        anim = item.animate_disappear()
+        self._active_anims.append(anim)
+
+        def cleanup():
+            if anim in self._active_anims:
+                self._active_anims.remove(anim)
+            on_finished()
+
+        anim.finished.connect(cleanup)
+        anim.start()
 
     # ---- drag & drop ----
     def dragEnterEvent(self, event):
@@ -323,15 +429,40 @@ class GraphCanvas(QGraphicsView):
         else:
             super().wheelEvent(event)
 
+    def _get_zoom_level(self) -> float:
+        return self._zoom_level
+
+    def _set_zoom_level(self, level: float):
+        if level == self._zoom_level:
+            return
+        factor = level / self._zoom_level
+        self._zoom_level = level
+        self.scale(factor, factor)
+
+    zoomLevel = pyqtProperty(float, _get_zoom_level, _set_zoom_level)
+
     def zoom_in(self):
-        if self._zoom_level < self.MAX_ZOOM:
-            self._zoom_level *= self.ZOOM_FACTOR
-            self.scale(self.ZOOM_FACTOR, self.ZOOM_FACTOR)
+        if self._zoom_level >= self.MAX_ZOOM:
+            return
+        target = min(self._zoom_level * self.ZOOM_FACTOR, self.MAX_ZOOM)
+        self._animate_zoom(target)
 
     def zoom_out(self):
-        if self._zoom_level > self.MIN_ZOOM:
-            self._zoom_level /= self.ZOOM_FACTOR
-            self.scale(1 / self.ZOOM_FACTOR, 1 / self.ZOOM_FACTOR)
+        if self._zoom_level <= self.MIN_ZOOM:
+            return
+        target = max(self._zoom_level / self.ZOOM_FACTOR, self.MIN_ZOOM)
+        self._animate_zoom(target)
+
+    def _animate_zoom(self, target: float):
+        if hasattr(self, '_zoom_anim') and self._zoom_anim is not None:
+            self._zoom_anim.stop()
+        anim = QPropertyAnimation(self, b"zoomLevel")
+        anim.setDuration(180)
+        anim.setStartValue(self._zoom_level)
+        anim.setEndValue(target)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.start()
+        self._zoom_anim = anim
 
     def fit_all(self):
         self.fitInView(

@@ -230,7 +230,7 @@ class MainWindow(QMainWindow):
         self._file_panel.set_project(project.root_path, project.allowed_extensions)
         self._file_panel.set_tracked_paths(tracked_paths)
         self._file_panel.refresh()
-        self._rebuild_graph()
+        self._rebuild_graph(animate=True)
         self._update_status()
 
         self._add_recent_project(path)
@@ -341,8 +341,10 @@ class MainWindow(QMainWindow):
             return
         reply = QMessageBox.question(self, "确认删除", "确定要删除此节点吗？此操作不可撤销。")
         if reply == QMessageBox.StandardButton.Yes:
-            self._storage.remove_node(node_id)
-            self._refresh_from_storage()
+            def do_delete():
+                self._storage.remove_node(node_id)
+                self._refresh_from_storage()
+            self._canvas.animate_remove_node(node_id, do_delete)
 
     def _on_edit_description(self, node_id: str):
         if not self._storage:
@@ -496,8 +498,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "无法加载项目数据，文件可能已损坏。")
             self._remove_recent_project(path)
 
-    def _rebuild_graph(self):
-        self._canvas.rebuild(self._nodes, self._edges)
+    def _rebuild_graph(self, animate: bool = False):
+        self._canvas.rebuild(self._nodes, self._edges, animate=animate)
 
     def _update_title(self):
         if self._project:

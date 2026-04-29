@@ -15,7 +15,7 @@ class EdgeItem(QGraphicsPathItem):
         self._highlighted = False
         self._build_path()
         self.setAcceptHoverEvents(True)
-        self.setZValue(-1)
+        self.setZValue(1)
 
     def _build_path(self):
         path = QPainterPath()
@@ -32,8 +32,13 @@ class EdgeItem(QGraphicsPathItem):
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget=None):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        color = QColor("#007acc") if self._highlighted else QColor("#555")
-        pen = QPen(color, 2 if self._highlighted else 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        if self._highlighted:
+            color = QColor("#93f4ff")
+            width = 1.8
+        else:
+            color = QColor("#afc7c7")
+            width = 1.2
+        pen = QPen(color, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPath(self.path())
@@ -50,8 +55,8 @@ class EdgeItem(QGraphicsPathItem):
         if p2 == p1:
             return
         angle = math.atan2(p2.y() - p1.y(), p2.x() - p1.x())
-        arrow_len = 10
-        arrow_angle = math.radians(20)
+        arrow_len = 8
+        arrow_angle = math.radians(22)
 
         tip = p2
         left = QPointF(

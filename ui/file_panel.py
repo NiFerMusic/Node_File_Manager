@@ -10,6 +10,7 @@ from PyQt6.QtGui import (
     QDrag,
     QFont,
     QIcon,
+    QLinearGradient,
     QPainter,
     QPen,
     QPixmap,
@@ -58,13 +59,18 @@ _DOT_ICON_CACHE: dict[str, QIcon] = {}
 def _get_dot_icon(color_hex: str) -> QIcon:
     if color_hex in _DOT_ICON_CACHE:
         return _DOT_ICON_CACHE[color_hex]
-    pix = QPixmap(12, 12)
+    size = 16
+    pix = QPixmap(size, size)
     pix.fill(Qt.GlobalColor.transparent)
     p = QPainter(pix)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setBrush(QBrush(QColor(color_hex)))
+    grad = QLinearGradient(0, 0, size, size)
+    base = QColor(color_hex)
+    grad.setColorAt(0, base.lighter(130))
+    grad.setColorAt(1, base.darker(115))
+    p.setBrush(QBrush(grad))
     p.setPen(Qt.PenStyle.NoPen)
-    p.drawEllipse(2, 2, 8, 8)
+    p.drawEllipse(2, 2, size - 4, size - 4)
     p.end()
     icon = QIcon(pix)
     _DOT_ICON_CACHE[color_hex] = icon
@@ -159,7 +165,7 @@ class FilePanel(QWidget):
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # date
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # type
         hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # status
-        hdr.resizeSection(0, 24)
+        hdr.resizeSection(0, 28)
 
         layout.addWidget(self._file_view)
 
