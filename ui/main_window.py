@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 
@@ -13,6 +14,7 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QSplitter,
     QStatusBar,
@@ -39,6 +41,8 @@ class MainWindow(QMainWindow):
         self._edges: list[Edge] = []
         self._undo_stack: list[tuple[list[dict], list[dict]]] = []
         self._undoing = False
+        self._recent_projects: list[str] = []
+        self._recent_menu: QMenu | None = None
 
         self.setWindowTitle("Visual Version Tree")
         self.setMinimumSize(1000, 650)
@@ -64,6 +68,10 @@ class MainWindow(QMainWindow):
         open_action.setShortcut(QKeySequence("Ctrl+O"))
         open_action.triggered.connect(self._open_project)
         file_menu.addAction(open_action)
+
+        self._recent_menu = QMenu("最近打开的项目", self)
+        self._recent_menu.aboutToShow.connect(self._build_recent_menu)
+        file_menu.addMenu(self._recent_menu)
 
         file_menu.addSeparator()
 
@@ -198,20 +206,19 @@ class MainWindow(QMainWindow):
         self._rebuild_graph()
         self._update_status()
 
-    def _open_project(self):
-        path = QFileDialog.getExistingDirectory(self, "选择项目根目录")
-        if not path:
-            return
+        self._add_recent_project(root_path)
+
+    def _load_project_from_path(self, path: str) -> bool:
+        """Load an existing project at the given path. Returns True on success."""
+        path = os.path.normpath(path)
         vmtree = os.path.join(path, ".vmtree")
         if not os.path.isdir(vmtree):
-            QMessageBox.warning(self, "警告", "所选目录不是有效的 VVT 项目（缺少 .vmtree）。")
-            return
+            return False
 
         self._storage = ProjectStorage(path)
         project = self._storage.load_project()
         if not project:
-            QMessageBox.warning(self, "警告", "无法加载项目数据。")
-            return
+            return False
 
         self._project = project
         self._nodes = self._storage.load_nodes()
@@ -225,6 +232,20 @@ class MainWindow(QMainWindow):
         self._file_panel.refresh()
         self._rebuild_graph()
         self._update_status()
+
+        self._add_recent_project(path)
+        return True
+
+    def _open_project(self):
+        path = QFileDialog.getExistingDirectory(self, "选择项目根目录")
+        if not path:
+            return
+        vmtree = os.path.join(path, ".vmtree")
+        if not os.path.isdir(vmtree):
+            QMessageBox.warning(self, "警告", "所选目录不是有效的 VVT 项目（缺少 .vmtree）。")
+            return
+        if not self._load_project_from_path(path):
+            QMessageBox.warning(self, "警告", "无法加载项目数据。")
 
     def _close_project(self):
         self._project = None
@@ -415,6 +436,65 @@ class MainWindow(QMainWindow):
         self._undoing = True
         self._refresh_from_storage()
         self._undoing = False
+
+    # ---- recent projects ----
+    def _load_recent_projects(self):
+        settings = QSettings("VVT", "VisualVersionTree")
+        data = settings.value("recentProjects", "[]")
+        try:
+            self._recent_projects = json.loads(data) if isinstance(data, str) else []
+        except (json.JSONDecodeError, TypeError):
+            self._recent_projects = []
+
+    def _save_recent_projects(self):
+        settings = QSettings("VVT", "VisualVersionTree")
+        settings.setValue("recentProjects", json.dumps(self._recent_projects, ensure_ascii=False))
+
+    def _add_recent_project(self, path: str):
+        path = os.path.normpath(path)
+        self._load_recent_projects()
+        if path in self._recent_projects:
+            self._recent_projects.remove(path)
+        self._recent_projects.insert(0, path)
+        if len(self._recent_projects) > 10:
+            self._recent_projects = self._recent_projects[:10]
+        self._save_recent_projects()
+
+    def _remove_recent_project(self, path: str):
+        path = os.path.normpath(path)
+        self._load_recent_projects()
+        if path in self._recent_projects:
+            self._recent_projects.remove(path)
+            self._save_recent_projects()
+
+    def _build_recent_menu(self):
+        if self._recent_menu is None:
+            return
+        self._recent_menu.clear()
+        self._load_recent_projects()
+        if not self._recent_projects:
+            action = self._recent_menu.addAction("(无最近项目)")
+            action.setEnabled(False)
+            return
+        for path in self._recent_projects:
+            name = os.path.basename(path)
+            action = self._recent_menu.addAction(name)
+            action.setToolTip(path)
+            action.triggered.connect(lambda checked, p=path: self._open_recent_project(p))
+
+    def _open_recent_project(self, path: str):
+        if not os.path.isdir(path):
+            QMessageBox.warning(self, "路径不存在", f"目录不存在或已被移动:\n{path}")
+            self._remove_recent_project(path)
+            return
+        vmtree = os.path.join(path, ".vmtree")
+        if not os.path.isdir(vmtree):
+            QMessageBox.warning(self, "不是 VVT 项目", f"该目录不再包含有效的 VVT 项目数据:\n{path}")
+            self._remove_recent_project(path)
+            return
+        if not self._load_project_from_path(path):
+            QMessageBox.warning(self, "警告", "无法加载项目数据，文件可能已损坏。")
+            self._remove_recent_project(path)
 
     def _rebuild_graph(self):
         self._canvas.rebuild(self._nodes, self._edges)
