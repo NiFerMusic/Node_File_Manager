@@ -36,7 +36,7 @@ class EdgeItem(QGraphicsPathItem):
             color = QColor("#93f4ff")
             width = 1.8
         else:
-            color = QColor("#afc7c7")
+            color = QColor("#ffffff")
             width = 1.2
         pen = QPen(color, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
         painter.setPen(pen)
